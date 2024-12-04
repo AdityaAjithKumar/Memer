@@ -7,39 +7,20 @@ from flask import Flask, request, render_template, jsonify, Response
 from pymongo import MongoClient
 import concurrent.futures
 import random
+import concurrent.futures
+import random
+import threading
+import queue
 
 # Configure Gemini API keys
 API_KEYS = [
 
-"AIzaSyAygKoZWZZ1-_Pv7lKpymuK_1HTS7ezL3o"
+    "AIzaSyAFC3ZLRndhFVuj5KUtDV1INDDlrSby6H8",
+    "AIzaSyAygKoZWZZ1-_Pv7lKpymuK_1HTS7ezL3o",
+    "AIzaSyCiwJJN4RIcvz9KGgKrvGa1BtMidaeltS8",
+    "AIzaSyDVjfxEgUIrVmHz5lHhhwHNkAuR-8qrHrw"
 
 ]
-
-# MongoDB Connection
-MONGO_URI = "mongodb+srv://123gamein:123gamein@memer.tcml6.mongodb.net/?retryWrites=true&w=majority&appName=Memer"
-client = MongoClient(MONGO_URI)
-db = client["SentimentDB"]
-collection = db["SentimentCollection"]
-
-
-def configure_gemini_api():
-    """Randomly select and configure a Gemini API key"""
-    api_key = random.choice(API_KEYS)
-    genai.configure(api_key=api_key)
-    return api_key
-
-
-def aigenrator(user_input):
-    """Classify sentiments of the input text"""
-    configure_gemini_api()
-    model = genai.GenerativeModel("gemini-1.5-pro")
-    response = model.generate_content(f"""classify the below text into Joyful,Sad,Angry,Fearful,Surprised,Disgusted,Confident,Nostalgic,Sarcastic,Excited,Bored,Anxious,Content,Motivated,Romantic,Frustrated,Jealous,Grateful,Curious,Embarrassed 
-    if there are multiple also add it , just only respond with the classified keywords and nothing else or else the app will crash 
-
-    {user_input}""")
-    return response.text.strip().split(",")
-
-
 def download_image(img_url):
     """Download image and return base64 encoded content"""
     try:
@@ -49,18 +30,67 @@ def download_image(img_url):
     except Exception as e:
         print(f"Error downloading image {img_url}: {e}")
         return None
+class APIKeyManager:
+    def __init__(self, api_keys):
+        self._queue = queue.Queue()
+        for key in api_keys:
+            self._queue.put(key)
+        self._lock = threading.Lock()
 
+    def get_api_key(self):
+        with self._lock:
+            if self._queue.empty():
+                # Refill the queue if it's empty
+                for key in API_KEYS:
+                    self._queue.put(key)
+            return self._queue.get()
+
+    def release_api_key(self, key):
+        with self._lock:
+            self._queue.put(key)
+
+# Initialize API Key Manager
+api_key_manager = APIKeyManager(API_KEYS)
+
+# MongoDB Connection
+MONGO_URI = "mongodb+srv://123gamein:123gamein@memer.tcml6.mongodb.net/?retryWrites=true&w=majority&appName=Memer"
+client = MongoClient(MONGO_URI)
+db = client["SentimentDB"]
+collection = db["SentimentCollection"]
+
+def configure_gemini_api():
+    """Obtain and configure a Gemini API key from the pool"""
+    api_key = api_key_manager.get_api_key()
+    genai.configure(api_key=api_key)
+    return api_key
+
+def aigenrator(user_input):
+    """Classify sentiments of the input text"""
+    api_key = None
+    try:
+        api_key = configure_gemini_api()
+        model = genai.GenerativeModel("gemini-1.5-pro")
+        response = model.generate_content(f"""classify the below text into Joyful,Sad,Angry,Fearful,Surprised,Disgusted,Confident,Nostalgic,Sarcastic,Excited,Bored,Anxious,Content,Motivated,Romantic,Frustrated,Jealous,Grateful,Curious,Embarrassed 
+        if there are multiple also add it , just only respond with the classified keywords and nothing else or else the app will crash 
+
+        {user_input}""")
+        return response.text.strip().split(",")
+    finally:
+        if api_key:
+            api_key_manager.release_api_key(api_key)
 
 def generate_meme_texts(template, user_input):
-    """Generate meme texts using Gemini API"""
+    """Generate meme texts using Gemini API with improved error handling"""
+    api_key = None
     try:
-        configure_gemini_api()
-        model = genai.GenerativeModel(model_name="gemini-1.5-pro")
-
         # Download image
         img_encoded = download_image(template['url'])
         if not img_encoded:
             return None
+
+        # Obtain API key
+        api_key = configure_gemini_api()
+        model = genai.GenerativeModel(model_name="gemini-1.5-pro")
 
         # Construct the prompt
         prompt = f"""
@@ -87,6 +117,9 @@ def generate_meme_texts(template, user_input):
     except Exception as e:
         print(f"Error generating meme texts: {e}")
         return None
+    finally:
+        if api_key:
+            api_key_manager.release_api_key(api_key)
 
 
 def generate_meme(template_id, texts):
@@ -153,7 +186,19 @@ meme_templates = [
         "id": "129242436",
         "explanation": "A meme template featuring a person sitting outdoors, presenting a blank space below 'CHANGE MY MIND'. The blank space is where the user inserts an argument or statement they want to challenge.",
         "url": "https://imgflip.com/s/meme/Change-My-Mind.jpg",
+    },
+    {
+        "id": "4087833",
+        "explanation": "skeleton waiting on bench in the park",
+        "url": "https://imgflip.com/s/meme/Waiting-Skeleton.jpg",
+    },
+
+{
+        "id": "97984",
+        "explanation": "A meme featuring a young girl looking at a burning house with a seemingly unfazed expression. The meme is used to comment on the insensitivity or lack of awareness some people may show in the face of tragedy. It's often meant to be darkly humorous, drawing a contrast between the seriousness of the event and the child's reaction.",
+        "url": "https://imgflip.com/s/meme/Disaster-Girl.jpg",
     }
+
 ]
 
 # Flask App
